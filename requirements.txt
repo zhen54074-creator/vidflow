@@ -1,0 +1,9 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+yt-dlp>=2024.3.10
+aiofiles>=23.2.1
+python-multipart>=0.0.9
+
+# 语音转文字（二选一，推荐 faster-whisper 更快）
+# pip install faster-whisper
+# pip install openai-whisper
