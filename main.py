@@ -10,6 +10,7 @@ import uuid
 import asyncio
 import tempfile
 import traceback
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -37,16 +38,57 @@ DOWNLOAD_DIR.mkdir(exist_ok=True)
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def extract_url(text: str) -> str:
-    """从分享文案中提取第一个 URL，并清理尾部多余符号"""
+    """从分享文案中提取第一个 URL，自动处理抖音短链重定向"""
     text = text.strip()
-    # 如果本身就是合法 URL 直接返回
+    # 从文本中提取 URL
     if re.match(r'^https?://', text):
-        return text.rstrip('/ ').rstrip()
-    # 从分享文案中提取
-    urls = re.findall(r'https?://[^\s\u4e00-\u9fff]+', text)
-    if not urls:
-        raise ValueError("无法从输入中提取有效链接")
-    return urls[0].rstrip('/')
+        raw_url = text.rstrip('/ ').rstrip()
+    else:
+        urls = re.findall(r'https?://[^\s\u4e00-\u9fff，。！？、]+', text)
+        if not urls:
+            raise ValueError("无法从输入中提取有效链接")
+        raw_url = urls[0].rstrip('/')
+
+    # 抖音短链需要跟踪重定向，拿到真实 URL
+    douyin_hosts = ('v.douyin.com', 'iesdouyin.com', 'www.iesdouyin.com')
+    parsed_host = raw_url.split('/')[2] if '/' in raw_url else ''
+    if any(h in parsed_host for h in douyin_hosts):
+        raw_url = _resolve_douyin(raw_url)
+
+    return raw_url
+
+
+def _resolve_douyin(short_url: str) -> str:
+    """跟踪抖音短链重定向，返回可被 yt-dlp 识别的真实链接"""
+    try:
+        req = urllib.request.Request(
+            short_url,
+            headers={
+                'User-Agent': (
+                    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) '
+                    'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 '
+                    'Mobile/15E148 Safari/604.1'
+                ),
+                'Referer': 'https://www.douyin.com/',
+            }
+        )
+        # 跟随重定向，最多跟 5 跳
+        opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler())
+        resp = opener.open(req, timeout=10)
+        final_url = resp.url
+
+        # 从落地页 URL 里提取 video_id，构造标准抖音链接
+        # 形如 https://www.douyin.com/video/7615913229033704750
+        match = re.search(r'video[_/](\d{15,20})', final_url)
+        if match:
+            vid_id = match.group(1)
+            return f'https://www.douyin.com/video/{vid_id}'
+
+        # 如果没匹配到 video id，直接用落地页 URL
+        return final_url
+    except Exception:
+        # 解析失败就原样返回，交给 yt-dlp 再试一次
+        return short_url
 
 
 def format_duration(seconds: Optional[float]) -> str:
